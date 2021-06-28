@@ -1,0 +1,248 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Route53 HandsOn
+
+Mappings:
+  StackConfig:
+    VPC:
+      CIDR: 10.0.2.0/24
+    PrivateSubnet:
+      CIDR: 10.0.2.0/26
+    PrivateSubnet2:
+      CIDR: 10.0.2.64/26
+    ClientVPC:
+      CIDR: 10.0.0.0/24 
+    CCnaviVPC:
+      CIDR: 10.0.1.0/24
+
+Parameters:
+  TargetIp1:
+      Type: String
+      MinLength: 7
+      MaxLength: 15
+  TargetIp2:
+      Type: String
+      MinLength: 7
+      MaxLength: 15
+
+Resources:
+#---vpc
+  VPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: !FindInMap [ StackConfig, VPC, CIDR ]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: "default"
+      Tags: 
+        - Key: Name
+          Value: resolv_vpc
+
+#---Private RoteTable, Route, Subnet, Assosiation
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: resolv_vpc_privateroutetable
+
+  PrivateRouteClient:
+    Type: AWS::EC2::Route
+    DependsOn: TGWvpcAttach
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: !FindInMap [ StackConfig, ClientVPC, CIDR ]
+      TransitGatewayId: !ImportValue TGW
+
+  PrivateRouteCCnavi:
+    Type: AWS::EC2::Route
+    DependsOn: TGWvpcAttach
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: !FindInMap [ StackConfig, CCnaviVPC, CIDR ]
+      TransitGatewayId: !ImportValue TGW
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}c"
+      CidrBlock: !FindInMap [ StackConfig, PrivateSubnet, CIDR ]
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: false
+      Tags: 
+        - Key: Name
+          Value: resolv_vpc_privatesubnet
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+#---Private RoteTable2, Route2, Subnet2, Assosiation2
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: resolv_vpc_privateroutetable2
+
+  PrivateRouteClient2:
+    Type: AWS::EC2::Route
+    DependsOn: TGWvpcAttach
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: !FindInMap [ StackConfig, ClientVPC, CIDR ]
+      TransitGatewayId: !ImportValue TGW
+
+  PrivateRouteCCnavi2:
+    Type: AWS::EC2::Route
+    DependsOn: TGWvpcAttach
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: !FindInMap [ StackConfig, CCnaviVPC, CIDR ]
+      TransitGatewayId: !ImportValue TGW
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}d"
+      CidrBlock: !FindInMap [ StackConfig, PrivateSubnet2, CIDR ]
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: false
+      Tags: 
+        - Key: Name
+          Value: resolv_vpc_privatesubnet2
+
+  PrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable2
+
+#---TGWvpcAttach
+  TGWvpcAttach:
+    Type: AWS::EC2::TransitGatewayAttachment
+    Properties: 
+      SubnetIds: 
+        - !Ref PrivateSubnet
+        - !Ref PrivateSubnet2
+      Tags: 
+        - Key: Name
+          Value: TGWresolvvpcAttach
+      TransitGatewayId: !ImportValue TGW
+      VpcId: !Ref VPC
+
+#---SG
+  SecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Private Subnet resolv SecurityGroup"
+      GroupName: "test-resolv-sg"
+      VpcId: !Ref VPC
+      SecurityGroupIngress: 
+        -  
+          CidrIp: "0.0.0.0/0"
+          Description: "allow ssh"
+          FromPort: 22
+          IpProtocol: "tcp"
+          ToPort: 22
+        -
+          CidrIp: "0.0.0.0/0"
+          Description: "allow icmp"
+          FromPort: 8
+          IpProtocol: "icmp"
+          ToPort: -1
+        -
+          CidrIp: "0.0.0.0/0"
+          Description: "allow udp"
+          FromPort: 33523
+          IpProtocol: "udp"
+          ToPort: 33523
+        -
+          CidrIp: "0.0.0.0/0"
+          Description: "allow udp"
+          FromPort: "53"
+          IpProtocol: "udp"
+          ToPort: "53"
+        -
+          CidrIp: "0.0.0.0/0"
+          Description: "allow tcp"
+          FromPort: "53"
+          IpProtocol: "tcp"
+          ToPort: "53"       
+
+#---Route53 Endpoint, Route53
+  Route53InboundEndpoint:
+    Type: AWS::Route53Resolver::ResolverEndpoint
+    DependsOn: VPC
+    Properties: 
+      Direction: INBOUND
+      IpAddresses: 
+        - SubnetId: !Ref PrivateSubnet
+        - SubnetId: !Ref PrivateSubnet2
+      Name: resolv_Route53_Inbound_Endpoint
+      SecurityGroupIds: 
+        - !Ref SecurityGroup
+      Tags: 
+        - Key: Name
+          Value: resolv_Route53_Inbound_Endpoint
+
+  Route53OutboundEndpoint:
+    Type: AWS::Route53Resolver::ResolverEndpoint
+    DependsOn: VPC
+    Properties: 
+      Direction: OUTBOUND
+      IpAddresses: 
+        - SubnetId: !Ref PrivateSubnet
+        - SubnetId: !Ref PrivateSubnet2
+      Name: resolv_Route53_Outbound_Endpoint
+      SecurityGroupIds: 
+        - !Ref SecurityGroup
+      Tags: 
+        - Key: Name
+          Value: resolv_Route53_Outbound_Endpoint
+
+  PrivateHostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: aws.co.jp
+      HostedZoneConfig:
+        Comment: My Private Domain
+      VPCs:
+        - VPCId: !Ref VPC
+          VPCRegion: !Sub "${AWS::Region}"
+
+  FirstServerRecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Name: 'test.aws.co.jp.'
+      Type: A
+      TTL: "300"
+      HostedZoneId: !Ref PrivateHostedZone
+      ResourceRecords: 
+        - '10.0.2.150'
+
+  ResolverRule:
+    Type: AWS::Route53Resolver::ResolverRule
+    Properties: 
+      DomainName: 'aws.ccnavi.co.jp'
+      Name: forwarding_to_ccnavidns
+      ResolverEndpointId: !Ref Route53OutboundEndpoint
+      RuleType: FORWARD
+      Tags: 
+        - Key: Name
+          Value: ccnaviForwardingRule
+      TargetIps: 
+        - Ip: !Ref TargetIp1
+          Port: 53
+        - Ip: !Ref TargetIp2
+          Port: 53
+
+  ResolverRuleAssociation:
+    Type: AWS::Route53Resolver::ResolverRuleAssociation
+    Properties:
+      Name: resolver-rule-association
+      ResolverRuleId: !Ref ResolverRule
+      VPCId: !Ref VPC

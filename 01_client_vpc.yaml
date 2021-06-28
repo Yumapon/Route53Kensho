@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Route53 HandsOn
+
+Mappings:
+  StackConfig:
+    VPC:
+      CIDR: 10.0.0.0/24
+    PublicSubnet:
+      CIDR: 10.0.0.64/26
+    PrivateSubnet:
+      CIDR: 10.0.0.128/26
+    CCNaviVPC:
+      CIDR: 10.0.1.0/24 
+    ResolvVPC:
+      CIDR: 10.0.2.0/24
+
+Parameters:
+  Ec2ImageId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+#---vpc
+  VPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: !FindInMap [ StackConfig, VPC, CIDR ]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: "default"
+      Tags: 
+        - Key: Name
+          Value: client_vpc
+
+#---Public RoteTable, Route, Subnet, Assosiation
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: AttachGateway
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: client_vpc_publicroutetable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !FindInMap [ StackConfig, PublicSubnet, CIDR ]
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      Tags: 
+        - Key: Name
+          Value: client_vpc_publicsubnet
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+#---Private RoteTable, Route, Subnet, Assosiation
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: client_vpc_privateroutetable
+
+  PrivateRouteCCNavi:
+    Type: AWS::EC2::Route
+    DependsOn: TGWvpcAttach
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: !FindInMap [ StackConfig, CCNaviVPC, CIDR ]
+      TransitGatewayId: !Ref TGW
+
+  PrivateRouteResolv:
+    Type: AWS::EC2::Route
+    DependsOn: TGWvpcAttach
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: !FindInMap [ StackConfig, ResolvVPC, CIDR ]
+      TransitGatewayId: !Ref TGW
+
+  PrivateRouteNAT:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}c"
+      CidrBlock: !FindInMap [ StackConfig, PrivateSubnet, CIDR ]
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: false
+      Tags: 
+        - Key: Name
+          Value: client_vpc_privatesubnet
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+#---IGW,IGW Attach
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: client_vpc_igw
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+#---NAT
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties: 
+      AllocationId: !GetAtt NATGatewayCEIP.AllocationId
+      ConnectivityType: public
+      SubnetId: !Ref PublicSubnet
+      Tags: 
+        - Key: Name
+          Value: client_vpc_nat
+
+#---NATGateway For EIP Create
+  NATGatewayCEIP:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+
+#---TGW, TGWvpcAttach
+  TGW:
+    Type: AWS::EC2::TransitGateway
+    Properties:
+      AmazonSideAsn: 64512
+      AutoAcceptSharedAttachments: enable
+      DefaultRouteTableAssociation: enable
+      DefaultRouteTablePropagation: enable
+      Description: TGW-ASN-64512
+      DnsSupport: enable
+      Tags: 
+        - Key: Name
+          Value: TransitGateway
+      VpnEcmpSupport: disable
+
+  TGWvpcAttach:
+    Type: AWS::EC2::TransitGatewayAttachment
+    Properties: 
+      SubnetIds: 
+        - !Ref PrivateSubnet
+      Tags: 
+        - Key: Name
+          Value: TGWclientvpcAttach
+      TransitGatewayId: !Ref TGW
+      VpcId: !Ref VPC
+
+#---InstanceProfile, Role
+  IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Path: /
+      RoleName: ArrowSSMRole
+
+  InstancePro:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      InstanceProfileName: InstancePro
+      Path: /
+      Roles: 
+        - !Ref IAMRole
+
+#---SG
+  SecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Private Subnet Client SecurityGroup"
+      GroupName: "test-client-sg"
+      VpcId: !Ref VPC
+      SecurityGroupIngress: 
+        -  
+          CidrIp: "0.0.0.0/0"
+          Description: "allow ssh"
+          FromPort: 22
+          IpProtocol: "tcp"
+          ToPort: 22
+        -
+          CidrIp: "0.0.0.0/0"
+          Description: "allow icmp"
+          FromPort: 8
+          IpProtocol: "icmp"
+          ToPort: -1
+        -
+          CidrIp: "0.0.0.0/0"
+          Description: "allow udp"
+          FromPort: 33523
+          IpProtocol: "udp"
+          ToPort: 33523
+
+#---EC2
+  EC2Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref Ec2ImageId
+      IamInstanceProfile: !Ref InstancePro
+      InstanceType: "t2.micro"
+      AvailabilityZone: !Sub "${AWS::Region}c"
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds: 
+        - !Ref SecurityGroup
+      Tags: 
+        - Key: "Name"
+          Value: "test-client"
+
+#---DHCPOptionSet
+#  DHCPOptionSet:
+#    Type: AWS::EC2::DHCPOptions
+#    Properties: 
+#      DomainNameServers: 
+#        - String
+#      Tags: 
+#        - Key: Name
+#          Value: clientvpc_optionset
+
+Outputs:
+  TransitGatewayId:
+    Value: !Ref TGW
+    Export:
+      Name: TGW
