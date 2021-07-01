@@ -5,8 +5,6 @@ Mappings:
   StackConfig:
     VPC:
       CIDR: 10.0.0.0/24
-    PublicSubnet:
-      CIDR: 10.0.0.64/26
     PrivateSubnet:
       CIDR: 10.0.0.128/26
     CCNaviVPC:
@@ -31,41 +29,6 @@ Resources:
       Tags: 
         - Key: Name
           Value: client_vpc
-
-#---Public RoteTable, Route, Subnet, Assosiation
-  PublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    DependsOn: AttachGateway
-    Properties:
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: client_vpc_publicroutetable
-
-  PublicRoute:
-    Type: AWS::EC2::Route
-    DependsOn: AttachGateway
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-
-  PublicSubnet:
-    Type: "AWS::EC2::Subnet"
-    Properties:
-      AvailabilityZone: !Sub "${AWS::Region}a"
-      CidrBlock: !FindInMap [ StackConfig, PublicSubnet, CIDR ]
-      VpcId: !Ref VPC
-      MapPublicIpOnLaunch: true
-      Tags: 
-        - Key: Name
-          Value: client_vpc_publicsubnet
-
-  PublicSubnetRouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnet
-      RouteTableId: !Ref PublicRouteTable
 
 #---Private RoteTable, Route, Subnet, Assosiation
   PrivateRouteTable:
@@ -92,13 +55,6 @@ Resources:
       DestinationCidrBlock: !FindInMap [ StackConfig, ResolvVPC, CIDR ]
       TransitGatewayId: !Ref TGW
 
-  PrivateRouteNAT:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NATGateway
-
   PrivateSubnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -115,37 +71,6 @@ Resources:
     Properties:
       SubnetId: !Ref PrivateSubnet
       RouteTableId: !Ref PrivateRouteTable
-
-#---IGW,IGW Attach
-  InternetGateway:
-    Type: "AWS::EC2::InternetGateway"
-    Properties:
-      Tags:
-        - Key: Name
-          Value: client_vpc_igw
-
-  AttachGateway:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Properties:
-      VpcId: !Ref VPC
-      InternetGatewayId: !Ref InternetGateway
-
-#---NAT
-  NATGateway:
-    Type: AWS::EC2::NatGateway
-    Properties: 
-      AllocationId: !GetAtt NATGatewayCEIP.AllocationId
-      ConnectivityType: public
-      SubnetId: !Ref PublicSubnet
-      Tags: 
-        - Key: Name
-          Value: client_vpc_nat
-
-#---NATGateway For EIP Create
-  NATGatewayCEIP:
-    Type: "AWS::EC2::EIP"
-    Properties:
-      Domain: vpc
 
 #---TGW, TGWvpcAttach
   TGW:
@@ -207,33 +132,6 @@ Resources:
       Roles: 
         - !Ref IAMRole
 
-#---SG
-  SecurityGroup:
-    Type: "AWS::EC2::SecurityGroup"
-    Properties:
-      GroupDescription: "Private Subnet Client SecurityGroup"
-      GroupName: "test-client-sg"
-      VpcId: !Ref VPC
-      SecurityGroupIngress: 
-        -  
-          CidrIp: "0.0.0.0/0"
-          Description: "allow ssh"
-          FromPort: 22
-          IpProtocol: "tcp"
-          ToPort: 22
-        -
-          CidrIp: "0.0.0.0/0"
-          Description: "allow icmp"
-          FromPort: 8
-          IpProtocol: "icmp"
-          ToPort: -1
-        -
-          CidrIp: "0.0.0.0/0"
-          Description: "allow udp"
-          FromPort: 33523
-          IpProtocol: "udp"
-          ToPort: 33523
-
 #---EC2
   EC2Instance:
     Type: "AWS::EC2::Instance"
@@ -243,8 +141,6 @@ Resources:
       InstanceType: "t2.micro"
       AvailabilityZone: !Sub "${AWS::Region}c"
       SubnetId: !Ref PrivateSubnet
-      SecurityGroupIds: 
-        - !Ref SecurityGroup
       Tags: 
         - Key: "Name"
           Value: "test-client"
@@ -259,25 +155,35 @@ Resources:
       VpcEndpointType: Gateway
       VpcId: !Ref VPC
 
-  LogsEndpoint:
+  SSMEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties: 
-      PrivateDnsEnabled: true
-      ServiceName: com.amazonaws.ap-northeast-1.logs
+      PrivateDnsEnabled: false
+      ServiceName: com.amazonaws.ap-northeast-1.ssm
+      SubnetIds: 
+        - !Ref PrivateSubnet
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+    
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      PrivateDnsEnabled: false
+      ServiceName: com.amazonaws.ap-northeast-1.ssmmessages
       SubnetIds: 
         - !Ref PrivateSubnet
       VpcEndpointType: Interface
       VpcId: !Ref VPC
 
-#---DHCPOptionSet
-#  DHCPOptionSet:
-#    Type: AWS::EC2::DHCPOptions
-#    Properties: 
-#      DomainNameServers: 
-#        - String
-#      Tags: 
-#        - Key: Name
-#          Value: clientvpc_optionset
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      PrivateDnsEnabled: false
+      ServiceName: com.amazonaws.ap-northeast-1.ec2messages
+      SubnetIds: 
+        - !Ref PrivateSubnet
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
 
 Outputs:
   TransitGatewayId:
